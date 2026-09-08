@@ -150,6 +150,17 @@ export const OIDCLogin = ({ oidcConfig }: Props) => {
 
         onLogin(result.id_token, result.refresh_token);
 
+        // An authorization code is single-use. Clear it, and the PKCE
+        // material that goes with it, as soon as it has been exchanged:
+        // this effect re-runs whenever the discovery query refetches
+        // (`as` gets a new identity), and the guard above only checks that
+        // the code and verifier are PRESENT -- so anything left behind is
+        // replayed against the token endpoint and rejected.
+        sessionStorage.removeItem(codeVerifierKey);
+        sessionStorage.removeItem(stateKey);
+        sessionStorage.removeItem(platformRedirectKey);
+        window.history.replaceState({}, '', window.location.pathname);
+
         // Always leave the callback URL. Staying on /login?code=... renders
         // the login button while a token is already stored, and a reload
         // replays the authorization code, which the provider refuses and
