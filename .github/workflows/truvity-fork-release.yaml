@@ -1,0 +1,83 @@
+name: Truvity fork release
+
+# Temporary fork workflow: builds and publishes the exact upstream image for
+# a `<upstream-tag>-truvity.N` tag, carrying only the cherry-picked OIDC
+# UI fix (akuity/kargo#7136) on top of that upstream tag. Deleted
+# along with this repo once the patch merges upstream and gitops moves to
+# that release.
+#
+# Modeled on upstream's own .github/workflows/release.yaml `publish-image`
+# job, minus the pieces that don't apply to a throwaway fork: no GitHub
+# Release object to react to, no cosign signing, SBOM, CVE gate, SLSA
+# provenance or chart publish (gitops keeps consuming the real
+# oci://ghcr.io/akuity/kargo-charts/kargo chart and overrides only
+# image.repository/image.tag).
+
+on:
+  push:
+    tags:
+      - '*-truvity.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-image:
+    permissions:
+      contents: read
+      packages: write # push the image to ghcr.io/truvity/kargo
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:3.0.0
+        ports:
+          - 5000:5000
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        with:
+          driver-opts: network=host
+
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build base image
+        run: |
+          BASE_IMAGE=localhost:5000/kargo-base make build-base-image
+          docker push localhost:5000/kargo-base:latest-arm64
+          docker push localhost:5000/kargo-base:latest-amd64
+
+      - name: Build and push final image
+        id: image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BASE_IMAGE=localhost:5000/kargo-base
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            GIT_TREE_STATE=clean
+          tags: ghcr.io/truvity/kargo:${{ github.ref_name }}
+          push: true
+          provenance: false
+          sbom: false
+
+      - name: Summary
+        run: |
+          echo "Pushed ghcr.io/truvity/kargo:${{ github.ref_name }} @ ${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
